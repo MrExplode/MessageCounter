@@ -7,6 +7,7 @@ import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.PrintWriter;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -14,6 +15,7 @@ import java.time.ZoneId;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.time.DurationFormatUtils;
 
 import com.google.gson.Gson;
@@ -23,6 +25,7 @@ import me.mrexplode.messagecounter.messenger.Message;
 
 public class Main {
     
+    public static final String normal_range = " qwertzuiopőúasdfghjkléáűóüöíyxcvbnmQWERTZUIOPŐÚASDFGHJKLÉÁŰÓÜÖÍYXCVBNM0123456789,.-<>#&@{};>*?:_\'\"+!%/=()\\|Ä€÷×[]$~^ˇ";
     public static final String workDir = System.getProperty("user.home") + "\\AppData\\Roaming\\MessageCounter";
     
     private static BufferedReader reader;
@@ -30,31 +33,39 @@ public class Main {
     public static void main(String[] args) throws IOException {
         System.out.println("---=== Welcome to MrExplolde's Messenger Information tool! ===---\nPlease specify the path your downloaded zip file.\n\nPlease note that if you wish to use this tool, all your downloaded data must be json formatted (as been selected at the Facebook settings)");
         reader = new BufferedReader(new InputStreamReader(System.in));
-        File zipFile = new File(reader.readLine());
+        File contentFile = new File(reader.readLine());
         
-        if (!zipFile.exists()) {
+        if (!contentFile.exists()) {
             System.out.println("The specified file doesn't exist!");
             return;
         }
         
-        fromDirectory(zipFile);
+        if (contentFile.isDirectory()) {
+            //unzipped
+            System.out.println("Unzipped data detected...");
+            proccessData(contentFile);
+        } else {
+            //zipped
+            File userdata = new File(workDir, contentFile.getName());
+            userdata.mkdirs();
+            long start = System.currentTimeMillis();
+            try {
+                System.out.println("Uncompressing data... (3 minutes)");
+                unzip(userdata, contentFile);
+            } catch (IOException e) {
+                System.err.println("Failed to uncompress user data archive.\nThings you can try: Place the archive in non-admin right required folder");
+                e.printStackTrace();
+                return;
+            }
+            System.out.println("Done! ("+ (System.currentTimeMillis() - start) + "ms)\n\n");
+            
+            proccessData(userdata);
+        }
         
     }
     
-    private static void fromDirectory(File zipFile) {
-        File userdata = new File(workDir, zipFile.getName());
-        userdata.mkdirs();
-        long start = System.currentTimeMillis();
-        try {
-            System.out.println("Uncompressing data...");
-            unzip(userdata, zipFile);
-        } catch (IOException e) {
-            System.err.println("Failed to uncompress user data archive.\nThings you can try: Place the archive in non-admin right required folder");
-            e.printStackTrace();
-            return;
-        }
-        System.out.println("Done! ("+ (System.currentTimeMillis() - start) + "ms)\n\n");
-        
+    //from a directory structure
+    protected static void proccessData(File userdata) {
         //checking that the user exported the messaging data from Facebook
         File[] files = userdata.listFiles();
         File messageFolder = null;
@@ -94,9 +105,17 @@ public class Main {
             Conversation conv = null;
             try {
                 Gson gson = new Gson();
-                conv = gson.fromJson(sb.toString(), Conversation.class);
+                conv = gson.fromJson(repair(sb.toString()), Conversation.class);
+                //removing emoji unicode codes
+                for (Message m : conv.messages) {
+                    m.content = outsideRange(m.content);
+                }
+                //export message history to file
+                MessageExporter exporter = new MessageExporter(conv);
+                exporter.start();
             } catch (Exception e) {
                 conv = unknown(person.getName());
+                e.printStackTrace();
             }
             
             int photoCount = 0;
@@ -111,7 +130,7 @@ public class Main {
                 videoCount = new File(person, "videos").listFiles().length;
                 audioCount = new File(person, "audio").listFiles().length;
                 fileCount = new File(person, "files").listFiles().length;
-            } catch (Exception e) {}
+            } catch (Exception e) {/*no folder -> exteption, the int remains 0**/}
             
             System.out.println("Conversation title: " + conv.title);
             if (conv.participants.length > 2)
@@ -132,7 +151,7 @@ public class Main {
             LocalDateTime last = LocalDateTime.ofInstant(Instant.ofEpochMilli(conv.messages[0].timestamp_ms), ZoneId.systemDefault());
             Duration duration = Duration.between(first, last);
             
-            System.out.println("Time between first and last message: " + DurationFormatUtils.formatDurationWords(duration.toMillis(), true, true));
+            System.out.println("Time between first and last message: " + DurationFormatUtils.formatDurationWords(Math.abs(duration.toMillis()), true, true));
         }
         
         //cleanup user sensitive data
@@ -140,9 +159,9 @@ public class Main {
         
     }
     
-    private static void deleteData(File userdata) {
+    protected static void deleteData(File userdata) {
         System.out.println("\n\n\n\nDeleting user sensitive data...");
-        deleteFolder(userdata);
+        //deleteFolder(userdata);
         System.out.println("Done!");
     }
     
@@ -165,6 +184,8 @@ public class Main {
     //198249ms: compressed size, /3 buffer, logs
     //199837ms: size, /4 buffer, logs
     //198740ms: compressed size, /4 buffer, w/o logs
+    //185966ms: nothing changed since. I have no idea now
+    //180011ms: wtf
     public static void unzip(File dir, File zip) throws IOException {
         ZipInputStream zipIn = new ZipInputStream(new FileInputStream(zip));
         ZipEntry entry = zipIn.getNextEntry();
@@ -199,13 +220,136 @@ public class Main {
         return conv;
     }
     
-    @SuppressWarnings("unused")
+    /**
+     * Repairing encoding errors, and removing emoji-leftovers, unreadable characters.
+     * 
+     * IDK is it so fucking hard to export in utf-8? why I have to do all this shit????????
+     * @param string
+     * @return
+     */
     private static String repair(String string) {
-        string = string.replaceAll("Ã¡", "á")
-                .replaceAll("Ã³", "ó")
-                .replaceAll("Ã", "Á")
-                .replaceAll("Ã©", "é")
-                .replaceAll("", "");
+        String correct = string//with escaping
+                                .replaceAll("\\u00c3\\u00a1", "á")
+                                .replaceAll("\\u00c3\\u00a0", "á")
+                                .replaceAll("\\u00c3\\u00b6", "ö")
+                                .replaceAll("\\u00c3\\u00ad", "í")
+                                .replaceAll("\\u00c3\\u00b3", "ó")
+                                .replaceAll("\\u00c3\\u00a9", "é")
+                                .replaceAll("\\u00c3\\u00bc", "ü")
+                                .replaceAll("\\u00c3\\u0089", "É")
+                                .replaceAll("\\u00c5\\u0091", "ő")
+                                .replaceAll("\\u00c5\\u00ab", "ü")
+                                .replaceAll("\\u00c3\\u00a8", "é")
+                                .replaceAll("\\u00c5\\u0091", "ő")
+                                .replaceAll("\\u00c3\\u00ba", "Ú")
+                                .replaceAll("\\u00c3\\u00ba", "ú")
+                                .replaceAll("\\u00c5\\u00b1", "ű")
+                                //other method
+                                .replace("\u00c3\u00a1", "á")
+                                .replace("\u00c3\u00a0", "á")
+                                .replace("\u00c3\u00b6", "ö")
+                                .replace("\u00c3\u00ad", "í")
+                                .replace("\u00c3\u00b3", "ó")
+                                .replace("\u00c3\u00a9", "é")
+                                .replace("\u00c3\u00bc", "ü")
+                                .replace("\u00c3\u0089", "É")
+                                .replace("\u00c5\u0091", "ő")
+                                .replace("\u00c5\u00ab", "ü")
+                                .replace("\u00c3\u00a8", "é")
+                                .replace("\u00c5\u0091", "ő")
+                                .replace("\u00c3\u00ba", "Ú")
+                                .replace("\u00c3\u00ba", "ú")
+                                .replace("\u00c5\u00b1", "ű")
+                                //with escaping
+                                .replace("\\u00c3\\u00a1", "á")
+                                .replace("\\u00c3\\u00a0", "á")
+                                .replace("\\u00c3\\u00b6", "ö")
+                                .replace("\\u00c3\\u00ad", "í")
+                                .replace("\\u00c3\\u00b3", "ó")
+                                .replace("\\u00c3\\u00a9", "é")
+                                .replace("\\u00c3\\u00bc", "ü")
+                                .replace("\\u00c3\\u0089", "É")
+                                .replace("\\u00c5\\u0091", "ő")
+                                .replace("\\u00c5\\u00ab", "ü")
+                                .replace("\\u00c3\\u00a8", "é")
+                                .replace("\\u00c5\\u0091", "ő")
+                                .replace("\\u00c3\\u00ba", "Ú")
+                                .replace("\\u00c3\\u00ba", "ú")
+                                .replace("\\u00c5\\u00b1", "ű");
+        //System.out.println("====\n" + string + "\n" + correct);
+        try {
+            Thread.sleep(10);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        return correct;
+    }
+    
+    /**
+     * Remove every character wich is outside of the normal_range
+     * 
+     * @param string the string input
+     * @return the corrected string
+     */
+    private static String outsideRange(String string) {
+        //why tho
         return string;
+        /*
+        if (string != null) {
+            char[] range = normal_range.toCharArray();
+            for (int i = 0; i < string.length(); i++) {
+                char current = string.charAt(i);
+                if (!ArrayUtils.contains(range, current)) {
+                    System.out.println("Outside character: " + current);
+                    return string.replaceAll(String.valueOf(current), "[x]");
+                }
+            }
+        }
+        return " ";
+        */
+    }
+}
+
+class MessageExporter extends Thread {
+    
+    private Conversation conversation;
+    
+    public MessageExporter(Conversation conversation) {
+        this.conversation = conversation;
+    }
+    
+    @Override
+    public void run() {
+        System.out.println("Exporting messaging history to file " + conversation.title + ".txt");
+        
+        try {
+            PrintWriter writer = new PrintWriter(new File(Main.workDir, conversation.title + ".txt"));
+        
+            Message[] messages = conversation.messages;
+            //from old to new messages
+            ArrayUtils.reverse(messages);
+            Message prev = null;
+            for (Message current : messages) {
+                LocalDateTime timestamp = LocalDateTime.ofInstant(Instant.ofEpochMilli(current.timestamp_ms), ZoneId.systemDefault());
+                if (prev != null) {
+                    //not first, check time between messages, if > 2h print time
+                    LocalDateTime prev_timestamp = LocalDateTime.ofInstant(Instant.ofEpochMilli(prev.timestamp_ms), ZoneId.systemDefault());
+                    Duration duration = Duration.between(prev_timestamp, timestamp);
+                    if (duration.toHours() > 2) {
+                        writer.println(timestamp.getYear() + " " + timestamp.getMonth().toString() + " " + timestamp.getDayOfMonth() + " " + timestamp.getHour() + ":" + timestamp.getMinute());
+                    }
+                } else {
+                    //first message, displaying time
+                    writer.println(timestamp.getYear() + " " + timestamp.getMonth().toString() + " " + timestamp.getDayOfMonth() + " " + timestamp.getHour() + ":" + timestamp.getMinute());
+                    writer.println("## Please note that emojis not supported in texts. ##");
+                }
+                
+                writer.println(current.sender_name.split(" ")[0] + ": " + current.content);
+                prev = current;
+            }
+            
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 }
