@@ -12,6 +12,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -20,8 +22,13 @@ import org.apache.commons.lang3.time.DurationFormatUtils;
 
 import com.google.gson.Gson;
 
+import me.mrexplode.messagecounter.messenger.Audio;
 import me.mrexplode.messagecounter.messenger.Conversation;
+import me.mrexplode.messagecounter.messenger.Gif;
+import me.mrexplode.messagecounter.messenger.MFile;
 import me.mrexplode.messagecounter.messenger.Message;
+import me.mrexplode.messagecounter.messenger.Person;
+import me.mrexplode.messagecounter.messenger.Photo;
 
 public class Main {
     
@@ -106,10 +113,6 @@ public class Main {
             try {
                 Gson gson = new Gson();
                 conv = gson.fromJson(repair(sb.toString()), Conversation.class);
-                //removing emoji unicode codes
-                for (Message m : conv.messages) {
-                    m.content = outsideRange(m.content);
-                }
                 //export message history to file
                 MessageExporter exporter = new MessageExporter(conv);
                 exporter.start();
@@ -228,40 +231,7 @@ public class Main {
      * @return
      */
     private static String repair(String string) {
-        String correct = string//with escaping
-                                .replaceAll("\\u00c3\\u00a1", "á")
-                                .replaceAll("\\u00c3\\u00a0", "á")
-                                .replaceAll("\\u00c3\\u00b6", "ö")
-                                .replaceAll("\\u00c3\\u00ad", "í")
-                                .replaceAll("\\u00c3\\u00b3", "ó")
-                                .replaceAll("\\u00c3\\u00a9", "é")
-                                .replaceAll("\\u00c3\\u00bc", "ü")
-                                .replaceAll("\\u00c3\\u0089", "É")
-                                .replaceAll("\\u00c5\\u0091", "ő")
-                                .replaceAll("\\u00c5\\u00ab", "ü")
-                                .replaceAll("\\u00c3\\u00a8", "é")
-                                .replaceAll("\\u00c5\\u0091", "ő")
-                                .replaceAll("\\u00c3\\u00ba", "Ú")
-                                .replaceAll("\\u00c3\\u00ba", "ú")
-                                .replaceAll("\\u00c5\\u00b1", "ű")
-                                //other method
-                                .replace("\u00c3\u00a1", "á")
-                                .replace("\u00c3\u00a0", "á")
-                                .replace("\u00c3\u00b6", "ö")
-                                .replace("\u00c3\u00ad", "í")
-                                .replace("\u00c3\u00b3", "ó")
-                                .replace("\u00c3\u00a9", "é")
-                                .replace("\u00c3\u00bc", "ü")
-                                .replace("\u00c3\u0089", "É")
-                                .replace("\u00c5\u0091", "ő")
-                                .replace("\u00c5\u00ab", "ü")
-                                .replace("\u00c3\u00a8", "é")
-                                .replace("\u00c5\u0091", "ő")
-                                .replace("\u00c3\u00ba", "Ú")
-                                .replace("\u00c3\u00ba", "ú")
-                                .replace("\u00c5\u00b1", "ű")
-                                //with escaping
-                                .replace("\\u00c3\\u00a1", "á")
+        String correct = string .replace("\\u00c3\\u00a1", "á")
                                 .replace("\\u00c3\\u00a0", "á")
                                 .replace("\\u00c3\\u00b6", "ö")
                                 .replace("\\u00c3\\u00ad", "í")
@@ -277,12 +247,8 @@ public class Main {
                                 .replace("\\u00c3\\u00ba", "ú")
                                 .replace("\\u00c5\\u00b1", "ű");
         //System.out.println("====\n" + string + "\n" + correct);
-        try {
-            Thread.sleep(10);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
-        return correct;
+        String correct2 = outsideRange(correct);
+        return correct2;
     }
     
     /**
@@ -292,21 +258,19 @@ public class Main {
      * @return the corrected string
      */
     private static String outsideRange(String string) {
-        //why tho
-        return string;
-        /*
         if (string != null) {
-            char[] range = normal_range.toCharArray();
-            for (int i = 0; i < string.length(); i++) {
-                char current = string.charAt(i);
-                if (!ArrayUtils.contains(range, current)) {
-                    System.out.println("Outside character: " + current);
-                    return string.replaceAll(String.valueOf(current), "[x]");
-                }
+            //https://stackoverflow.com/questions/24215063/unicode-replacement-with-ascii
+            Pattern p = Pattern.compile("\\\\u(\\p{XDigit}{4})");
+            Matcher m = p.matcher(string);
+            StringBuffer buf = new StringBuffer(string.length());
+            while (m.find()) {
+                String ch = String.valueOf((char) Integer.parseInt(m.group(1), 16));
+                m.appendReplacement(buf, Matcher.quoteReplacement(""));
             }
+            m.appendTail(buf);
+            return buf.toString();
         }
-        return " ";
-        */
+        return "";
     }
 }
 
@@ -320,10 +284,20 @@ class MessageExporter extends Thread {
     
     @Override
     public void run() {
-        System.out.println("Exporting messaging history to file " + conversation.title + ".txt");
+        System.out.println("[Exporter] Exporting messaging history to file " + conversation.title + ".txt");
         
         try {
-            PrintWriter writer = new PrintWriter(new File(Main.workDir, conversation.title + ".txt"));
+            PrintWriter writer = new PrintWriter(new File(Main.workDir, fileName(conversation.title) + ".txt"));
+            
+            //printing participants in group chat
+            writer.println("Title: " + conversation.title);
+            if (conversation.participants.length > 2) {
+                StringBuilder sb = new StringBuilder("Participants: (" + conversation.participants.length + ") ");
+                for (Person p : conversation.participants) {
+                    sb.append(p.name + "   ");
+                }
+                writer.println(sb.toString());
+            }
         
             Message[] messages = conversation.messages;
             //from old to new messages
@@ -344,12 +318,93 @@ class MessageExporter extends Thread {
                     writer.println("## Please note that emojis not supported in texts. ##");
                 }
                 
-                writer.println(current.sender_name.split(" ")[0] + ": " + current.content);
+                //not text, but multimedia message
+                if (current.content == null) {
+                    //audio
+                    if (current.audio_files != null) {
+                        //multiple
+                        if (current.audio_files.length > 1) {
+                            StringBuilder sb = new StringBuilder("[");
+                            for (Audio a : current.audio_files) {
+                                sb.append("\"" + a.uri + "\"");
+                            }
+                            sb.append("]");
+                            writer.println(current.sender_name.split(" ")[0] + ": sent multiple audio messages. " + sb.toString());
+                        } else {
+                            //single
+                            writer.println(current.sender_name.split(" ")[0] + ": sent an audio message. (" + current.audio_files[0].uri + ")");
+                        }
+                    //normal file
+                    } else if (current.files != null) {
+                        //multiple
+                        if (current.files.length > 1) {
+                            StringBuilder sb = new StringBuilder("[");
+                            for (MFile f : current.files) {
+                                sb.append("\"" + f.uri + "\"");
+                            }
+                            sb.append("]");
+                            writer.println(current.sender_name.split(" ")[0] + " sent multiple files. " + sb.toString());
+                        } else {
+                            //single
+                            writer.println(current.sender_name.split(" ")[0] + " sent a file. (" + current.files[0].uri + ")");
+                        }
+                    //gif
+                    } else if (current.gifs != null) {
+                        //multiple
+                        if (current.gifs.length > 1) {
+                            StringBuilder sb = new StringBuilder("[");
+                            for (Gif g : current.gifs) {
+                                sb.append("\"" + g.uri + "\"");
+                            }
+                            sb.append("]");
+                            writer.println(current.sender_name.split(" ")[0] + " sent multiple gifs. " + sb.toString());
+                        } else {
+                            //single
+                            writer.println(current.sender_name.split(" ")[0] + " sent a gif. (" + current.gifs[0].uri + ")");
+                        }
+                    //photo
+                    } else if (current.photos != null) {
+                        //multiple
+                        if (current.photos.length > 1) {
+                            StringBuilder sb = new StringBuilder("[");
+                            for (Photo p : current.photos) {
+                                sb.append("\"" + p.uri + "\"");
+                            }
+                            sb.append("]");
+                            writer.println(current.sender_name.split(" ")[0] + " sent multiple photos. " + sb.toString());
+                        } else {
+                            //single
+                            writer.println(current.sender_name.split(" ")[0] + " sent a photo. (" + current.photos[0].uri + ")");
+                        }
+                    }
+                } else {
+                    //text message
+                    writer.println(current.sender_name.split(" ")[0] + ": " + current.content);
+                }
                 prev = current;
             }
             
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+    
+    /**
+     * Removes every restricted filename character from the string.
+     * 
+     * @param name the filename
+     * @return corrected filename
+     */
+    private static String fileName(String name) {
+        String correct = name.replace("<", "")
+                            .replace(">", "")
+                            .replace(":", "")
+                            .replace("\"", "")
+                            .replace("/", "")
+                            .replace("\\", "")
+                            .replace("|", "")
+                            .replace("?", "")
+                            .replace("*", "");
+        return correct;
     }
 }

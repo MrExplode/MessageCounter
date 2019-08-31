@@ -1,8 +1,8 @@
 package me.mrexplode.messagecounter.messenger;
 
 
-public class Person {
+public class Gif {
     
-    public String name;
+    public String uri;
 
 }
